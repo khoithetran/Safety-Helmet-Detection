@@ -23,6 +23,76 @@ pinned: false
 
 ---
 
+## Tiếng Việt
+
+### Demo trực tuyến
+
+**[tr-th-khoi/safety-helmet-detection trên Hugging Face Spaces](https://huggingface.co/spaces/tr-th-khoi/safety-helmet-detection)**
+
+### Tổng quan
+
+Safety Helmet Detection là hệ thống AI full-stack dùng để phát hiện trạng thái đội mũ bảo hộ tại công trường. Hệ thống sử dụng FastAPI cho backend, React + Vite cho frontend, YOLOv8s-AP cho suy luận nhận diện và Docker để triển khai.
+
+Hệ thống hỗ trợ ba chế độ chính:
+
+| Chức năng | Mô tả |
+|-----------|-------|
+| Nhận diện ảnh | Tải ảnh lên và trả về bounding box, lớp dự đoán và độ tin cậy |
+| Theo dõi video | Phân tích video tải lên, theo dõi đối tượng qua nhiều khung hình và ghi nhận sự kiện vi phạm |
+| Giám sát camera trực tiếp | Nhận luồng webcam/IP camera/RTSP và hiển thị kết quả gần thời gian thực |
+| Lịch sử vi phạm | Lưu ảnh toàn cảnh, ảnh crop và thông tin sự kiện để tra cứu |
+| Báo cáo AI/PDF | Tạo báo cáo tiếng Việt cho các cảnh báo và xuất PDF từ phiên giám sát |
+
+### Dữ liệu và huấn luyện mô hình
+
+Mô hình chính là **YOLOv8s-AP**, được xây dựng trên YOLOv8s và bổ sung **Adaptive Spatial Feature Fusion (ASFF)** ở phần neck cùng **Pseudo-Deformable Convolution v2 (Pseudo-DCNv2)** ở detection head. Mục tiêu là cải thiện khả năng nhận diện các đối tượng nhỏ, bị che khuất hoặc xuất hiện trong bối cảnh công trường phức tạp.
+
+Theo `notebooks/report.pdf`, bộ dữ liệu cuối cùng có **19.212 ảnh** và **43.507 bounding boxes**, được chuẩn hóa về 3 lớp:
+
+| ID | Lớp | Ý nghĩa | Số bbox | Tỷ lệ |
+|----|-----|---------|--------:|------:|
+| 0 | `helmet` | Đội mũ bảo hộ đúng chuẩn | 19.089 | 43,88% |
+| 1 | `head` | Không đội mũ | 5.875 | 13,50% |
+| 2 | `non_helmet` | Đội mũ không đạt chuẩn | 18.543 | 42,62% |
+|  | **Tổng cộng** |  | **43.507** | **100%** |
+
+Phân chia dữ liệu:
+
+| Tập dữ liệu | Số ảnh | Tỷ lệ |
+|-------------|-------:|------:|
+| Train | 15.369 | 80% |
+| Validation | 1.921 | 10% |
+| Test | 1.922 | 10% |
+| **Tổng cộng** | **19.212** | **100%** |
+
+Cấu hình huấn luyện:
+
+| Tham số | Giá trị |
+|---------|---------|
+| Epochs | 50 |
+| Batch size | 16 |
+| Kích thước ảnh | 640x640 |
+| Thiết bị | GPU NVIDIA Tesla P100 16 GB trên Kaggle |
+| Workers | 2 |
+| Python | 3.10 |
+
+Kết quả đánh giá trên tập kiểm thử:
+
+| Class | Precision | Recall | mAP@50 | mAP@50-95 |
+|-------|----------:|-------:|-------:|----------:|
+| All | 0.960 | 0.912 | 0.963 | 0.706 |
+| Helmet | 0.965 | 0.907 | 0.969 | 0.647 |
+| Head | 0.952 | 0.901 | 0.947 | 0.650 |
+| Non-Helmet | 0.964 | 0.930 | 0.973 | 0.820 |
+
+Ma trận nhầm lẫn chuẩn hóa trong báo cáo cho thấy tỷ lệ dự đoán đúng của các lớp `helmet`, `head` và `non_helmet` lần lượt khoảng **94%**, **91%** và **92%**. Các trường hợp nhầm lẫn chủ yếu xuất hiện khi vùng đầu bị che khuất hoặc điều kiện ánh sáng phức tạp.
+
+---
+
+## English
+
+---
+
 ## Live Demo
 
 > Try it now — no setup required.
@@ -193,46 +263,70 @@ When person-first is active:
 
 ## Model Training
 
-> Full training notebook: [`notebooks/Model_trainer.ipynb`](notebooks/Model_trainer.ipynb) — designed to run on **Kaggle** with a GPU accelerator.
+> Source report: [`notebooks/report.pdf`](notebooks/report.pdf). Full training notebook: [`notebooks/Model_trainer.ipynb`](notebooks/Model_trainer.ipynb) - designed to run on **Kaggle** with a GPU accelerator.
 
 ### Dataset
 
-Three Kaggle datasets were merged and re-labelled into a unified 3-class scheme:
+The final dataset was built from public Kaggle/Roboflow sources plus manually collected construction-site images, then normalized into a unified 3-class YOLO format.
 
-| Dataset | Source images | Notes |
-|---------|:-------------:|-------|
-| `kltn-dataset-3class` | 5 165 | Class 3 (other) dropped |
-| `kltn-dataset-hat-cap` | 950 | Class 0 re-mapped → 2 (non-helmet) |
-| `kltn-dataset-cap-hat-v2` | 12 147 | Classes 0 & 2 unified → 2; classes 1 & 3 dropped |
-| **Total** | **18 262** | 80 / 10 / 10 train / val / test split |
+| Source | Images | Label handling |
+|--------|-------:|----------------|
+| Hard Hat Detection (Kaggle) | 5,000 | Kept `helmet` and `head`; dropped `person` |
+| Roboflow cap dataset | 12,147 | Re-mapped selected classes into `non_helmet` |
+| Roboflow hat dataset | 950 | Re-mapped Class 0 into `non_helmet` |
+| Manually collected construction-site images | 165 | Manually labeled as `helmet`, `head`, and `non_helmet` |
+| **Final dataset** | **19,212** | 80 / 10 / 10 train / validation / test split |
+
+**Dataset split:**
+
+| Split | Images | Ratio |
+|-------|-------:|------:|
+| Train | 15,369 | 80% |
+| Validation | 1,921 | 10% |
+| Test | 1,922 | 10% |
+| **Total** | **19,212** | **100%** |
 
 **Class map:**
 
-| ID | Name | Meaning |
-|----|------|---------|
-| 0 | `helmet` | Hard hat worn correctly |
-| 1 | `head` | Bare head (violation) |
-| 2 | `non_helmet` | Soft cap / non-compliant headwear |
+| ID | Name | Meaning | Bounding boxes | Ratio |
+|----|------|---------|---------------:|------:|
+| 0 | `helmet` | Hard hat worn correctly | 19,089 | 43.88% |
+| 1 | `head` | Bare head / no helmet | 5,875 | 13.50% |
+| 2 | `non_helmet` | Soft cap or non-compliant headwear | 18,543 | 42.62% |
+|  | **Total** |  | **43,507** | **100%** |
 
-### Architecture — YOLOv8s + ADSC
+### Architecture - YOLOv8s-AP
 
-The base `yolov8s-p2.yaml` (4-scale P2–P5 head) was extended with an **ADSC wrapper** patched onto the final `Detect` layer:
+The model is a custom **YOLOv8s-AP** detector built on YOLOv8s and adapted for three construction-site safety classes.
 
-- **`ASFF4`** — Adaptive Spatial Feature Fusion across all 4 scales via learnable per-location softmax weights.
-- **`PseudoDCNv2`** — Deformable-convolution approximation: a depth-wise attention gate modulates the dilated conv input, avoiding the full offset-field overhead.
-- **`UpsampleCARAFE`** — Content-aware upsampling that predicts a per-pixel reassembly kernel instead of bilinear interpolation.
+- **ASFF (Adaptive Spatial Feature Fusion)** is added in the neck so the model can learn spatially adaptive multi-scale feature fusion, improving small-object detection for helmets and heads.
+- **Pseudo-DCNv2 (Pseudo-Deformable Convolution v2)** is added in the detection head to improve robustness for deformed, partially occluded, or irregular head/helmet regions.
 
-Pre-trained weights from `yolov8s.pt` were transferred (219 / 437 layers matched).
+This keeps the YOLOv8s backbone/head structure practical for real-time monitoring while improving robustness in complex construction-site scenes.
 
 ### Training Configuration
 
-```
-epochs   : 50
-batch    : 16
-imgsz    : 640
-device   : GPU (Kaggle T4)
-amp      : False   # disabled for numerical stability with custom layers
-```
+| Parameter | Value |
+|-----------|-------|
+| Epochs | 50 |
+| Batch size | 16 |
+| Image size | 640x640 |
+| Training device | NVIDIA Tesla P100 16 GB GPU on Kaggle |
+| Data workers | 2 |
+| Python | 3.10 |
+
+### Evaluation Results
+
+The trained model was evaluated on the independent test split using Precision, Recall, mAP@50, mAP@50-95, loss curves, and a normalized confusion matrix.
+
+| Class | Precision | Recall | mAP@50 | mAP@50-95 |
+|-------|----------:|-------:|-------:|----------:|
+| All | 0.960 | 0.912 | 0.963 | 0.706 |
+| Helmet | 0.965 | 0.907 | 0.969 | 0.647 |
+| Head | 0.952 | 0.901 | 0.947 | 0.650 |
+| Non-Helmet | 0.964 | 0.930 | 0.973 | 0.820 |
+
+The normalized confusion matrix in the report shows correct classification rates of approximately **94%** for `helmet`, **91%** for `head`, and **92%** for `non_helmet`. Most remaining errors occur under occlusion or difficult lighting.
 
 ---
 
@@ -306,7 +400,7 @@ Real-time ByteTrack tracking demonstration:
 │       │   └── app-text.vi.json   # Vietnamese i18n strings
 │       └── services/api.ts
 ├── notebooks/
-│   └── Model_trainer.ipynb # Kaggle training notebook (dataset merge → ADSC → YOLOv8s train)
+│   └── Model_trainer.ipynb # Kaggle training notebook (dataset merge → YOLOv8s-AP train)
 ├── models/                 # Model weights (yolov8s_ap.onnx) — gitignored
 ├── demo/                   # Real-world validation samples
 ├── Dockerfile              # Multi-stage build: Node (React) → Python (FastAPI)
