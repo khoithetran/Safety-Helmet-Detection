@@ -31,340 +31,117 @@ pinned: false
 
 ### Tổng quan
 
-Safety Helmet Detection là hệ thống AI full-stack dùng để phát hiện trạng thái đội mũ bảo hộ tại công trường. Hệ thống sử dụng FastAPI cho backend, React + Vite cho frontend, YOLOv8s-AP cho suy luận nhận diện và Docker để triển khai.
+Safety Helmet Detection là hệ thống AI full-stack giám sát việc đội mũ bảo hộ tại công trường. Ứng dụng gồm frontend React + Vite, backend FastAPI, mô hình YOLOv8s-AP chạy bằng ONNX Runtime và Docker để triển khai thống nhất.
 
-Hệ thống hỗ trợ ba chế độ chính:
+| Nhóm chức năng | Nội dung |
+|----------------|----------|
+| Ảnh / video / camera | Nhận diện trên ảnh tải lên, video ngoại tuyến và luồng webcam/IP camera/RTSP |
+| Cảnh báo vi phạm | Theo dõi đối tượng qua nhiều frame, ghi nhận `head` và `non_helmet` làm sự kiện vi phạm/nghi ngờ |
+| Lịch sử và báo cáo | Lưu ảnh toàn cảnh, ảnh crop, lịch sử JSONL, báo cáo AI tiếng Việt và PDF |
+| Tối ưu triển khai | Mô hình `.onnx`, static frontend phục vụ cùng FastAPI, hạn chế CORS và giảm cold start |
 
-| Chức năng | Mô tả |
-|-----------|-------|
-| Nhận diện ảnh | Tải ảnh lên và trả về bounding box, lớp dự đoán và độ tin cậy |
-| Theo dõi video | Phân tích video tải lên, theo dõi đối tượng qua nhiều khung hình và ghi nhận sự kiện vi phạm |
-| Giám sát camera trực tiếp | Nhận luồng webcam/IP camera/RTSP và hiển thị kết quả gần thời gian thực |
-| Lịch sử vi phạm | Lưu ảnh toàn cảnh, ảnh crop và thông tin sự kiện để tra cứu |
-| Báo cáo AI/PDF | Tạo báo cáo tiếng Việt cho các cảnh báo và xuất PDF từ phiên giám sát |
+### Kiến trúc hệ thống
 
-### Dữ liệu và huấn luyện mô hình
+```text
+Browser
+  |
+  | React + Vite UI
+  v
+FastAPI backend
+  |-- Image/video/live-stream APIs
+  |-- History, alert, report, PDF APIs
+  |-- Static frontend serving
+  v
+YOLOv8s-AP ONNX inference + ByteTrack
+  |
+  +-- Optional Gemini report generation
+```
 
-Mô hình chính là **YOLOv8s-AP**, được xây dựng trên YOLOv8s và bổ sung **Adaptive Spatial Feature Fusion (ASFF)** ở phần neck cùng **Pseudo-Deformable Convolution v2 (Pseudo-DCNv2)** ở detection head. Mục tiêu là cải thiện khả năng nhận diện các đối tượng nhỏ, bị che khuất hoặc xuất hiện trong bối cảnh công trường phức tạp.
+Luồng xử lý chính: frontend gửi ảnh, video hoặc URL camera đến FastAPI; backend giải mã dữ liệu, chạy suy luận ONNX, theo dõi vi phạm qua nhiều frame, lưu sự kiện và trả kết quả JSON hoặc MJPEG stream về giao diện.
 
-Theo `notebooks/report.pdf`, bộ dữ liệu cuối cùng có **19.212 ảnh** và **43.507 bounding boxes**, được chuẩn hóa về 3 lớp:
+### Mô hình, dữ liệu và kết quả
 
-| ID | Lớp | Ý nghĩa | Số bbox | Tỷ lệ |
-|----|-----|---------|--------:|------:|
-| 0 | `helmet` | Đội mũ bảo hộ đúng chuẩn | 19.089 | 43,88% |
-| 1 | `head` | Không đội mũ | 5.875 | 13,50% |
-| 2 | `non_helmet` | Đội mũ không đạt chuẩn | 18.543 | 42,62% |
-|  | **Tổng cộng** |  | **43.507** | **100%** |
+Mô hình chính là **YOLOv8s-AP**, xây dựng trên YOLOv8s và bổ sung **ASFF** ở phần neck cùng **Pseudo-DCNv2** ở detection head để cải thiện nhận diện mũ/vùng đầu nhỏ, bị che khuất hoặc biến dạng trong bối cảnh công trường.
 
-Phân chia dữ liệu:
+Nguồn số liệu: [`notebooks/report.pdf`](notebooks/report.pdf) và [`notebooks/Model_trainer.ipynb`](notebooks/Model_trainer.ipynb).
 
-| Tập dữ liệu | Số ảnh | Tỷ lệ |
-|-------------|-------:|------:|
-| Train | 15.369 | 80% |
-| Validation | 1.921 | 10% |
-| Test | 1.922 | 10% |
-| **Tổng cộng** | **19.212** | **100%** |
+| Hạng mục | Giá trị |
+|----------|--------:|
+| Tổng ảnh | 19.212 |
+| Tổng bounding boxes | 43.507 |
+| Train / Validation / Test | 15.369 / 1.921 / 1.922 |
+| Epochs / Batch / Image size | 50 / 16 / 640x640 |
+| Môi trường train | Kaggle, NVIDIA Tesla P100 16 GB, Python 3.10 |
 
-Cấu hình huấn luyện:
+| Lớp | Số bbox | Precision | Recall | mAP@50 | mAP@50-95 |
+|-----|--------:|----------:|-------:|-------:|----------:|
+| All | 43.507 | 0.960 | 0.912 | 0.963 | 0.706 |
+| `helmet` | 19.089 | 0.965 | 0.907 | 0.969 | 0.647 |
+| `head` | 5.875 | 0.952 | 0.901 | 0.947 | 0.650 |
+| `non_helmet` | 18.543 | 0.964 | 0.930 | 0.973 | 0.820 |
 
-| Tham số | Giá trị |
-|---------|---------|
-| Epochs | 50 |
-| Batch size | 16 |
-| Kích thước ảnh | 640x640 |
-| Thiết bị | GPU NVIDIA Tesla P100 16 GB trên Kaggle |
-| Workers | 2 |
-| Python | 3.10 |
-
-Kết quả đánh giá trên tập kiểm thử:
-
-| Class | Precision | Recall | mAP@50 | mAP@50-95 |
-|-------|----------:|-------:|-------:|----------:|
-| All | 0.960 | 0.912 | 0.963 | 0.706 |
-| Helmet | 0.965 | 0.907 | 0.969 | 0.647 |
-| Head | 0.952 | 0.901 | 0.947 | 0.650 |
-| Non-Helmet | 0.964 | 0.930 | 0.973 | 0.820 |
-
-Ma trận nhầm lẫn chuẩn hóa trong báo cáo cho thấy tỷ lệ dự đoán đúng của các lớp `helmet`, `head` và `non_helmet` lần lượt khoảng **94%**, **91%** và **92%**. Các trường hợp nhầm lẫn chủ yếu xuất hiện khi vùng đầu bị che khuất hoặc điều kiện ánh sáng phức tạp.
+Mô hình được export từ `.pt` sang `.onnx` bằng `export_onnx.py` để giảm phụ thuộc PyTorch, rút ngắn cold start và phù hợp môi trường cloud CPU-only.
 
 ---
 
 ## English
 
----
-
-## Live Demo
-
-> Try it now — no setup required.
+### Live Demo
 
 **[tr-th-khoi/safety-helmet-detection on Hugging Face Spaces](https://huggingface.co/spaces/tr-th-khoi/safety-helmet-detection)**
 
----
+### Overview
 
-## Key Features
+Safety Helmet Detection is a full-stack AI system for construction-site helmet compliance monitoring. The app combines a React + Vite frontend, a FastAPI backend, YOLOv8s-AP inference through ONNX Runtime, and Docker-based deployment.
 
-| Feature | Description |
-|---------|-------------|
-| **Real-time Image Detection** | Upload any image and get bounding-box results with class labels and confidence scores in under a second |
-| **Video Violation Tracking** | Upload a video and watch ByteTrack follow every person across frames with live MJPEG streaming |
-| **Live Stream Monitoring** | Connect a webcam or IP camera for continuous real-time detection with bbox overlays |
-| **Timestamp-Synchronized Alerts** | Click any violation crop to instantly seek the video to that exact moment and pause for inspection |
-| **AI Violation Reports** | Gemini 2.0 Flash generates Vietnamese-language reports per alert — risk level, description, recommendations |
-| **Instant PDF Export** | Download a violation report PDF from the current session at any time, no history or LLM required |
-| **ONNX-Optimized Inference** | Model exported from `.pt` to `.onnx` for significantly lower latency and memory footprint on CPU-only cloud environments; auto-selects CUDA provider when `onnxruntime-gpu` is available |
-| **Visual Loading Feedback** | Indeterminate amber progress bar overlays the image/video preview during inference — no layout jump, no spinner |
-| **Modern React UI** | Responsive TypeScript + Vite frontend served from the same Docker image — zero CORS friction |
-| **Violation History** | Persistent event log with full-frame captures and cropped evidence per violation |
+| Feature group | Scope |
+|---------------|-------|
+| Image / video / camera | Detect on uploaded images, offline videos, and webcam/IP camera/RTSP streams |
+| Violation alerts | Track objects across frames and log `head` or `non_helmet` as violation/suspicion events |
+| History and reports | Store full-frame evidence, cropped evidence, JSONL history, Vietnamese AI reports, and PDFs |
+| Deployment optimization | `.onnx` model, frontend served by FastAPI, simpler CORS, and lower cold-start overhead |
 
----
+### System Architecture
 
-## System Architecture
-
-```
-+------------------------------------------------------------------+
-|                        Docker Container                           |
-|                                                                   |
-|  +------------------+        +------------------------------+    |
-|  |  React + Vite    |        |      FastAPI Backend          |    |
-|  |  (TypeScript)    |<------>|      (Python 3.11)            |    |
-|  |                  |  REST  |                               |    |
-|  |  - Image tab     |  API   |  - /predict                   |    |
-|  |  - Video tab     |        |  - /api/upload-video          |    |
-|  |  - LiveStream tab|        |  - /api/stream/video          |    |
-|  |  - ReportModal   |        |  - /api/live/webcam/frame     |    |
-|  +------------------+        |  - /api/report/simple-pdf     |    |
-|   Served as static           +----------+--------------------+    |
-|   files by FastAPI                      |                         |
-|                              +----------v-----------+             |
-|                              |    YOLO Inference    |             |
-|                              |    (ONNX Runtime)    |             |
-|                              |    + ByteTrack       |             |
-|                              +----------+-----------+             |
-|                                         |                         |
-|                              +----------v-----------+             |
-|                              |  Gemini 2.0 Flash    |             |
-|                              |  (AI Report Engine)  |             |
-|                              +----------------------+             |
-+------------------------------------------------------------------+
-         | Port 7860 (HF Spaces) / 8000 (local)
-         v
-     Browser / Client
+```text
+Browser
+  |
+  | React + Vite UI
+  v
+FastAPI backend
+  |-- Image/video/live-stream APIs
+  |-- History, alert, report, PDF APIs
+  |-- Static frontend serving
+  v
+YOLOv8s-AP ONNX inference + ByteTrack
+  |
+  +-- Optional Gemini report generation
 ```
 
-**Communication flow:**
-1. React sends `multipart/form-data` or JSON to FastAPI endpoints via relative paths.
-2. FastAPI runs ONNX inference and returns JSON detections.
-3. For video/live, FastAPI yields an MJPEG byte stream; React renders it live via `<img>` or `<video>` tags.
-4. Violation alerts are polled every second and displayed as clickable crop cards.
-5. On demand, Gemini 2.0 Flash generates a Vietnamese report per alert (rate-limited to 12 req/min).
-6. "Tải PDF" sends current session alerts to `/api/report/simple-pdf` and downloads instantly.
+Main flow: the frontend sends an image, video, or camera URL to FastAPI; the backend decodes the input, runs ONNX inference, tracks violations across frames, persists events, and returns JSON results or an MJPEG stream to the UI.
 
----
+### Model, Data, and Results
 
-## Person-First Detection Pipeline
+The main detector is **YOLOv8s-AP**, built on YOLOv8s with **ASFF** in the neck and **Pseudo-DCNv2** in the detection head to improve detection of small, occluded, or deformed helmet/head regions in construction-site scenes.
 
-> Available since this commit — off by default, no existing behaviour changes.
+Sources: [`notebooks/report.pdf`](notebooks/report.pdf) and [`notebooks/Model_trainer.ipynb`](notebooks/Model_trainer.ipynb).
 
-### Motivation
+| Item | Value |
+|------|------:|
+| Total images | 19,212 |
+| Total bounding boxes | 43,507 |
+| Train / Validation / Test | 15,369 / 1,921 / 1,922 |
+| Epochs / Batch / Image size | 50 / 16 / 640x640 |
+| Training environment | Kaggle, NVIDIA Tesla P100 16 GB, Python 3.10 |
 
-The baseline single-stage model (YOLOv8s) runs on the **full frame** and can
-miss people in difficult poses (seated, crouched, partially occluded).  Because
-the PPE conclusion is drawn from the model output alone, missed people produce
-false "all helmets OK" frames.
+| Class | BBoxes | Precision | Recall | mAP@50 | mAP@50-95 |
+|-------|-------:|----------:|-------:|-------:|----------:|
+| All | 43,507 | 0.960 | 0.912 | 0.963 | 0.706 |
+| `helmet` | 19,089 | 0.965 | 0.907 | 0.969 | 0.647 |
+| `head` | 5,875 | 0.952 | 0.901 | 0.947 | 0.650 |
+| `non_helmet` | 18,543 | 0.964 | 0.930 | 0.973 | 0.820 |
 
-### How It Works
-
-```
-Full frame
-   │
-   ▼
-[Person detector – YOLOv8n]
-   │  (x1,y1,x2,y2, track_id)  per person
-   ▼
-Upper-body crop  ──► [Helmet model – YOLOv8s ONNX]
-   │                        │
-   │                  (helmet / head / non-helmet)
-   │                  mapped back to frame coords
-   ▼
-Same ViolationTracker  →  same alert / history logic
-```
-
-1. **Person detection** — YOLOv8n detects every `person` in the frame.
-   It is ~5× smaller than YOLOv8s and better at detecting people at unusual
-   poses because COCO training data covers diverse human poses.
-
-2. **ByteTrack person tracking** — stable person IDs are maintained across
-   frames (video/live modes) so the helmet status cache is keyed by person.
-
-3. **Upper-body crop** — the top `UPPER_BODY_CROP_RATIO` (default 60 %) of
-   each person bbox is cropped with a small margin and fed to the helmet model.
-   The helmet now occupies a larger fraction of the model's input → better
-   recall for small/distant people.
-
-4. **Helmet status cache** — the helmet model only reruns every
-   `HELMET_RECHECK_INTERVAL` frames per person (default: every 5 processed
-   frames).  Between checks the last known status is reused.  This keeps the
-   total compute roughly constant compared with the standard pipeline.
-
-5. **Same outputs** — violation class names, confidence values, and frame
-   coordinates flow into the exact same `_ViolationTracker` / alert /
-   history / PDF / report logic.  No frontend changes required.
-
-### Enabling Person-First Mode
-
-Set in `.env` (or as an environment variable):
-
-```env
-PERSON_FIRST_ENABLED=true
-```
-
-The first request will auto-download `yolov8n.pt` (~6 MB) from Ultralytics
-into `~/.ultralytics/`.  To pin a local copy:
-
-```env
-PERSON_MODEL_PATH=models/yolov8n.pt
-```
-
-Or export to ONNX for faster CPU inference:
-
-```bash
-python -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=640)"
-mv yolov8n.onnx models/
-```
-
-```env
-PERSON_MODEL_PATH=models/yolov8n.onnx
-```
-
-### Tuning Parameters
-
-| Variable | Default | Effect |
-|----------|---------|--------|
-| `PERSON_CONFIDENCE_THRESHOLD` | `0.40` | Min confidence to accept a person detection |
-| `UPPER_BODY_CROP_RATIO` | `0.60` | Top fraction of person bbox used as helmet crop |
-| `PERSON_CROP_MARGIN` | `0.05` | Fractional padding added around the crop |
-| `HELMET_RECHECK_INTERVAL` | `5` | Re-run helmet model every N processed frames per track |
-| `PERSON_DETECTION_INTERVAL` | `1` | Run person detector every N processed frames — default=1 (every frame, full accuracy); set to 2–4 on weak CPU to halve person-model calls at the cost of brief lag when a new person enters |
-
-### Visual Differences
-
-When person-first is active:
-
-**Video / IP Camera modes** (MJPEG overlay drawn server-side):
-- **Thin blue bounding box + P{id} label** around each tracked person.
-- **Standard coloured box** for the helmet/head/non-helmet detection inside the person.
-
-**Webcam mode** (bboxes drawn client-side by the browser):
-- Toggle the **Person-First** switch in the UI — the frontend sends `person_first=true` with every frame.
-- Backend creates a per-session `PersonFirstPipeline` and returns `person_boxes` alongside normal detections.
-- Selecting the **Person** filter chip shows the thin orange person bounding boxes on the canvas overlay.
-
----
-
-## Model Training
-
-> Source report: [`notebooks/report.pdf`](notebooks/report.pdf). Full training notebook: [`notebooks/Model_trainer.ipynb`](notebooks/Model_trainer.ipynb) - designed to run on **Kaggle** with a GPU accelerator.
-
-### Dataset
-
-The final dataset was built from public Kaggle/Roboflow sources plus manually collected construction-site images, then normalized into a unified 3-class YOLO format.
-
-| Source | Images | Label handling |
-|--------|-------:|----------------|
-| Hard Hat Detection (Kaggle) | 5,000 | Kept `helmet` and `head`; dropped `person` |
-| Roboflow cap dataset | 12,147 | Re-mapped selected classes into `non_helmet` |
-| Roboflow hat dataset | 950 | Re-mapped Class 0 into `non_helmet` |
-| Manually collected construction-site images | 165 | Manually labeled as `helmet`, `head`, and `non_helmet` |
-| **Final dataset** | **19,212** | 80 / 10 / 10 train / validation / test split |
-
-**Dataset split:**
-
-| Split | Images | Ratio |
-|-------|-------:|------:|
-| Train | 15,369 | 80% |
-| Validation | 1,921 | 10% |
-| Test | 1,922 | 10% |
-| **Total** | **19,212** | **100%** |
-
-**Class map:**
-
-| ID | Name | Meaning | Bounding boxes | Ratio |
-|----|------|---------|---------------:|------:|
-| 0 | `helmet` | Hard hat worn correctly | 19,089 | 43.88% |
-| 1 | `head` | Bare head / no helmet | 5,875 | 13.50% |
-| 2 | `non_helmet` | Soft cap or non-compliant headwear | 18,543 | 42.62% |
-|  | **Total** |  | **43,507** | **100%** |
-
-### Architecture - YOLOv8s-AP
-
-The model is a custom **YOLOv8s-AP** detector built on YOLOv8s and adapted for three construction-site safety classes.
-
-- **ASFF (Adaptive Spatial Feature Fusion)** is added in the neck so the model can learn spatially adaptive multi-scale feature fusion, improving small-object detection for helmets and heads.
-- **Pseudo-DCNv2 (Pseudo-Deformable Convolution v2)** is added in the detection head to improve robustness for deformed, partially occluded, or irregular head/helmet regions.
-
-This keeps the YOLOv8s backbone/head structure practical for real-time monitoring while improving robustness in complex construction-site scenes.
-
-### Training Configuration
-
-| Parameter | Value |
-|-----------|-------|
-| Epochs | 50 |
-| Batch size | 16 |
-| Image size | 640x640 |
-| Training device | NVIDIA Tesla P100 16 GB GPU on Kaggle |
-| Data workers | 2 |
-| Python | 3.10 |
-
-### Evaluation Results
-
-The trained model was evaluated on the independent test split using Precision, Recall, mAP@50, mAP@50-95, loss curves, and a normalized confusion matrix.
-
-| Class | Precision | Recall | mAP@50 | mAP@50-95 |
-|-------|----------:|-------:|-------:|----------:|
-| All | 0.960 | 0.912 | 0.963 | 0.706 |
-| Helmet | 0.965 | 0.907 | 0.969 | 0.647 |
-| Head | 0.952 | 0.901 | 0.947 | 0.650 |
-| Non-Helmet | 0.964 | 0.930 | 0.973 | 0.820 |
-
-The normalized confusion matrix in the report shows correct classification rates of approximately **94%** for `helmet`, **91%** for `head`, and **92%** for `non_helmet`. Most remaining errors occur under occlusion or difficult lighting.
-
----
-
-## Model Optimization
-
-The model was originally trained as a YOLOv8s PyTorch checkpoint (`.pt`). For cloud deployment it was converted to ONNX format:
-
-```bash
-python export_onnx.py --model models/yolov8s_ap.pt --imgsz 640
-```
-
-| Metric | PyTorch `.pt` | ONNX Runtime |
-|--------|:-------------:|:------------:|
-| Runtime dependency | `torch` (~2 GB) | `onnxruntime` (~15 MB) |
-| Cold-start time | ~8 s | ~2 s |
-| CPU inference / image | ~250 ms | ~90 ms |
-| Docker image size | ~5 GB | ~1.8 GB |
-
-> ONNX Runtime removes the PyTorch dependency entirely, making the Docker image significantly leaner — critical for free-tier Hugging Face Spaces with CPU-only inference.
-
----
-
-## Detection Showcase
-
-Real-world validation results on construction site footage:
-
-| Sample 1 | Sample 2 |
-|:---------:|:---------:|
-| ![Detection Sample](demo/image_demo_1.jpg) | ![Detection Sample](demo/image_demo_2.jpg) |
-| Multi-person helmet detection with confidence scores | No-helmet violation flagged and tracked across frames |
-
-### Video Demo
-
-Real-time ByteTrack tracking demonstration:
-
-[`demo/video_demo.mp4`](demo/video_demo.mp4)
-
-> GitHub and Hugging Face Spaces do not autoplay MP4 files in the README. Click the link above to download or preview. Alternatively, upload any construction site video directly in the [live demo](https://huggingface.co/spaces/tr-th-khoi/safety-helmet-detection).
+The model is exported from `.pt` to `.onnx` with `export_onnx.py` to remove the heavy PyTorch runtime from deployment, reduce cold start, and fit CPU-only cloud environments.
 
 ---
 
@@ -400,7 +177,8 @@ Real-time ByteTrack tracking demonstration:
 │       │   └── app-text.vi.json   # Vietnamese i18n strings
 │       └── services/api.ts
 ├── notebooks/
-│   └── Model_trainer.ipynb # Kaggle training notebook (dataset merge → YOLOv8s-AP train)
+│   ├── Model_trainer.ipynb # Kaggle training notebook (dataset merge → YOLOv8s-AP train)
+│   └── report.pdf          # Thesis report with dataset, training, and evaluation details
 ├── models/                 # Model weights (yolov8s_ap.onnx) — gitignored
 ├── demo/                   # Real-world validation samples
 ├── Dockerfile              # Multi-stage build: Node (React) → Python (FastAPI)
